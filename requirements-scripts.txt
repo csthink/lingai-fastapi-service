@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Data processing scripts
+pandas>=2.0.0
+openpyxl>=3.1.0
+korean-romanizer>=0.27.0
