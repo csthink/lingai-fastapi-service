@@ -1,8 +1,12 @@
 """
 LingAI Backend - FastAPI Application Entry Point
 """
-from fastapi import FastAPI
+import time
+import uuid
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 from loguru import logger
 import os
@@ -37,6 +41,54 @@ async def lifespan(app: FastAPI):
     logger.info("LingAI Backend shutting down...")
 
 
+# ---------------------------------------------------------------------------
+#  Trace Middleware — 链路追踪
+# ---------------------------------------------------------------------------
+
+class TraceMiddleware(BaseHTTPMiddleware):
+    """
+    为每个请求分配 trace_id，用于全链路日志追踪。
+
+    行为：
+    1. 优先从请求头 X-Trace-Id 读取（由 Unified Service 网关透传）
+    2. 若无则自动生成 UUID
+    3. 写入 request.state.trace_id，供下游业务代码使用
+    4. 响应头回传 X-Trace-Id
+    5. 打印请求/响应摘要日志（含耗时）
+    """
+
+    TRACE_HEADER = "X-Trace-Id"
+
+    async def dispatch(self, request: Request, call_next):
+        # 1. 获取或生成 trace_id
+        trace_id = request.headers.get(self.TRACE_HEADER) or uuid.uuid4().hex
+        request.state.trace_id = trace_id
+
+        # 2. 记录请求日志
+        logger.info(
+            "[{}] --> {} {} (client={})",
+            trace_id, request.method, request.url.path,
+            request.client.host if request.client else "-",
+        )
+
+        # 3. 执行后续处理并计时
+        start = time.perf_counter()
+        response = await call_next(request)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+
+        # 4. 响应头回传 trace_id
+        response.headers[self.TRACE_HEADER] = trace_id
+
+        # 5. 记录响应日志
+        logger.info(
+            "[{}] <-- {} {} {} ({:.1f}ms)",
+            trace_id, request.method, request.url.path,
+            response.status_code, elapsed_ms,
+        )
+
+        return response
+
+
 # Create FastAPI application
 app = FastAPI(
     title="LingAI Backend",
@@ -53,6 +105,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Trace middleware — must be added after CORS so trace_id covers all routes
+app.add_middleware(TraceMiddleware)
 
 # Include routers
 app.include_router(tts.router, prefix="/api/tts", tags=["TTS"])
