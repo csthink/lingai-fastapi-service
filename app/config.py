@@ -35,8 +35,8 @@ class Settings(BaseSettings):
     llm_timeout: int = 20  # LLM响应需要足够时间
     tts_timeout: int = 10
     
-    # Redis
-    redis_url: str = "redis://:**@localhost:10399/0"
+    # Redis（生产环境必须通过环境变量 REDIS_URL 注入，禁止在源码中写入密码）
+    redis_url: str = "redis://localhost:6379/0"
     
     # TTS Redis Cache
     tts_redis_ttl: int = 7 * 24 * 3600  # 7 days

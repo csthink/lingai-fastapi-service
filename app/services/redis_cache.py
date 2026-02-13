@@ -6,6 +6,7 @@ import json
 import redis
 from typing import Any, Optional
 from loguru import logger
+from app.config import get_settings
 
 
 class RedisCache:
@@ -22,7 +23,9 @@ class RedisCache:
     _instance: Optional['RedisCache'] = None
     _pool: Optional[redis.ConnectionPool] = None
     
-    def __init__(self, redis_url: str = "redis://:**@localhost:10399/0", prefix: str = "lingai"):
+    def __init__(self, redis_url: Optional[str] = None, prefix: str = "lingai"):
+        if redis_url is None:
+            redis_url = get_settings().redis_url
         self._prefix = prefix
         self._redis_url = redis_url
         self._client: Optional[redis.Redis] = None
@@ -45,7 +48,7 @@ class RedisCache:
             self._client = None
     
     @classmethod
-    def get_instance(cls, redis_url: str = "redis://:**@localhost:10399/0") -> 'RedisCache':
+    def get_instance(cls, redis_url: Optional[str] = None) -> 'RedisCache':
         """获取单例实例"""
         if cls._instance is None:
             cls._instance = RedisCache(redis_url)
@@ -142,7 +145,7 @@ class RedisCache:
 # 便捷函数
 _cache_instance: Optional[RedisCache] = None
 
-def get_cache(redis_url: str = "redis://:**@localhost:10399/0") -> RedisCache:
+def get_cache(redis_url: Optional[str] = None) -> RedisCache:
     """获取缓存服务实例"""
     global _cache_instance
     if _cache_instance is None:

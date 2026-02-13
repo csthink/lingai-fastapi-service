@@ -81,6 +81,12 @@ cp .env.example .env
 | `AUDIO_CACHE_DIR` | TTS 音频缓存目录 | 可选 |
 | `DEBUG` | 调试模式（默认 `true`） | 可选 |
 
+> [!CAUTION]
+> **安全规范**：
+> - 生产环境 **必须** 通过环境变量（`REDIS_URL`）或 `.env` 文件注入 Redis 连接地址，格式示例：`redis://:YOUR_PASSWORD@host:port/0`
+> - **严禁** 将真实密码写入源码默认值或提交到版本控制
+> - `.env` 文件已在 `.gitignore` 中，请勿手动移除
+
 ### 3. 启动服务
 
 ```bash
