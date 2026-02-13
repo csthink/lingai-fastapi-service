@@ -5,6 +5,7 @@ Redis缓存服务
 import json
 import redis
 from typing import Any, Optional
+from urllib.parse import urlparse
 from loguru import logger
 from app.config import get_settings
 
@@ -42,10 +43,22 @@ class RedisCache:
             self._client = redis.Redis(connection_pool=RedisCache._pool)
             # 测试连接
             self._client.ping()
-            logger.info(f"Redis connected: {self._redis_url}")
+            logger.info(f"Redis connected: {self._mask_url(self._redis_url)}")
         except Exception as e:
             logger.error(f"Redis connection failed: {e}")
             self._client = None
+    
+    @staticmethod
+    def _mask_url(url: str) -> str:
+        """脱敏 Redis URL，隐藏密码部分"""
+        try:
+            parsed = urlparse(url)
+            if parsed.password:
+                masked = url.replace(f":{parsed.password}@", ":***@")
+                return masked
+            return url
+        except Exception:
+            return "redis://***"
     
     @classmethod
     def get_instance(cls, redis_url: Optional[str] = None) -> 'RedisCache':
