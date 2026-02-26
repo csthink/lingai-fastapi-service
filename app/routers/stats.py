@@ -45,7 +45,8 @@ async def upload_batch_stats(request: BatchStatsRequest):
     
     # POC: Just log events, no persistent storage yet
     for event in request.events:
-        event_time = datetime.fromtimestamp(event.ts)
+        ts = event.ts / 1000 if event.ts > 1_000_000_000_000 else event.ts
+        event_time = datetime.fromtimestamp(ts)
         logger.debug(f"Event: {event.name} at {event_time} - {event.data}")
     
     return BatchStatsResponse(

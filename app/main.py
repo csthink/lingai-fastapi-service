@@ -4,7 +4,8 @@ LingAI Backend - FastAPI Application Entry Point
 import time
 import uuid
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
@@ -116,6 +117,29 @@ app.include_router(content.router, prefix="/api/content", tags=["Content"])
 app.include_router(stats.router, prefix="/api/stats", tags=["Statistics"])
 app.include_router(spirit.router, prefix="/api/spirit", tags=["Spirit"])
 app.include_router(sse_test.router, prefix="/api/sse", tags=["SSE Test"])
+
+
+# ---------------------------------------------------------------------------
+#  Global Exception Handlers — 统一 JSON 错误响应
+# ---------------------------------------------------------------------------
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    trace_id = getattr(request.state, "trace_id", "")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "traceId": trace_id},
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    trace_id = getattr(request.state, "trace_id", "")
+    logger.exception("[{}] Unhandled exception: {}", trace_id, exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "traceId": trace_id},
+    )
 
 
 @app.get("/")
