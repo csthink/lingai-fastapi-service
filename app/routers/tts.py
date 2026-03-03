@@ -4,28 +4,14 @@ Provides Korean TTS via Alibaba Cloud
 """
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import Response
-from pydantic import BaseModel
-from typing import Optional
 from loguru import logger
 
 from app.services.aliyun_tts import AliyunTTSService
 from app.dependencies import get_tts_service
+from app.models.tts import TTSRequest, TTSResponse
 
 
 router = APIRouter()
-
-
-class TTSRequest(BaseModel):
-    """TTS request model."""
-    text: str
-    lang: str = "ko"  # ko=Korean, zh=Chinese
-    
-
-class TTSResponse(BaseModel):
-    """TTS response model with audio URL."""
-    audio_url: Optional[str] = None
-    duration_ms: Optional[int] = None
-    cached: bool = False
 
 
 @router.post("", response_model=TTSResponse)

@@ -3,11 +3,10 @@ Statistics Router
 Provides event tracking and statistics API with Redis-backed aggregation.
 """
 from fastapi import APIRouter, Query
-from pydantic import BaseModel
-from typing import List, Optional, Any, Dict
 from datetime import datetime
 from loguru import logger
 from app.services.redis_service import get_redis_service
+from app.models.stats import StatEvent, BatchStatsRequest, BatchStatsResponse
 
 router = APIRouter()
 
@@ -20,25 +19,6 @@ def _to_int(v, default=0):
         return int(v)
     except Exception:
         return default
-
-
-class StatEvent(BaseModel):
-    """Single stat event model."""
-    name: str
-    data: Optional[Dict[str, Any]] = None
-    ts: int  # Unix timestamp
-
-
-class BatchStatsRequest(BaseModel):
-    """Batch stats upload request."""
-    device_id: str
-    events: List[StatEvent]
-
-
-class BatchStatsResponse(BaseModel):
-    """Batch stats upload response."""
-    received: int
-    success: bool
 
 
 @router.post("/batch", response_model=BatchStatsResponse)
