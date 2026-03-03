@@ -13,7 +13,7 @@ from loguru import logger
 
 from app.services.llm_service import LLMService
 from app.services.dict_service import DictService
-from app.services.redis_cache import get_cache
+from app.services.redis_service import get_redis_service
 from app.config import get_settings
 
 
@@ -152,17 +152,14 @@ async def search_dict(
         actual_direction = direction
 
     settings = get_settings()
-    cache = get_cache(settings.redis_url)
+    redis = get_redis_service()
     cache_key = f"dict_search:{query}:{actual_direction}"
     
     # Check cache first
-    cached_result = cache.get(cache_key)
+    cached_result = await redis.get_json(cache_key) if redis else None
     if cached_result:
         logger.info(f"Cache hit for: {query}")
-        try:
-            return cached_result
-        except Exception as e:
-            logger.warning(f"Failed to parse cached result: {e}")
+        return cached_result
     
     # Cache miss - call LLM
     logger.info(f"Cache miss for: {query}, calling LLM")
@@ -188,7 +185,8 @@ async def search_dict(
         result_dict = response.model_dump(by_alias=True)
         
         # Cache the result
-        cache.set(cache_key, result_dict)
+        if redis:
+            await redis.set_json(cache_key, result_dict)
         logger.info(f"Cached result for: {query}")
         
         return result_dict
@@ -237,12 +235,12 @@ async def search_dict_stream(
         actual_direction = direction
 
     settings = get_settings()
-    cache = get_cache(settings.redis_url)
+    redis = get_redis_service()
     cache_key = f"dict_search:{query}:{actual_direction}"
     
     async def generate_sse():
         # Check cache first
-        cached_result = cache.get(cache_key)
+        cached_result = await redis.get_json(cache_key) if redis else None
         if cached_result:
             logger.info(f"Stream: Cache hit for {query}")
             yield f"data: {json.dumps({'type': 'cached', 'data': cached_result}, ensure_ascii=False)}\n\n"
@@ -351,7 +349,8 @@ async def search_dict_stream(
                 result_dict = response.model_dump(by_alias=True)
                 
                 # Cache the result
-                cache.set(cache_key, result_dict)
+                if redis:
+                    await redis.set_json(cache_key, result_dict)
                 logger.info(f"Stream: Cached result for {query}")
                 
                 yield f"data: {json.dumps({'type': 'done', 'data': result_dict}, ensure_ascii=False)}\n\n"
@@ -472,11 +471,11 @@ async def quick_translate(
     
     # Not found in local, use LLM
     settings = get_settings()
-    cache = get_cache(settings.redis_url)
+    redis = get_redis_service()
     cache_key = f"quick_translate:{word}:{actual_direction}"
     
     # Check cache
-    cached_result = cache.get(cache_key)
+    cached_result = await redis.get_json(cache_key) if redis else None
     if cached_result:
         return QuickTranslateResponse(
             word=word,
@@ -490,7 +489,8 @@ async def quick_translate(
         translation = await llm_service.quick_translate(word, actual_direction)
         
         # Cache the result
-        cache.set(cache_key, {"translation": translation}, ttl=86400 * 7)  # 7 days
+        if redis:
+            await redis.set_json(cache_key, {"translation": translation}, ttl=86400 * 7)  # 7 days
         
         return QuickTranslateResponse(
             word=word,

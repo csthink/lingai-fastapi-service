@@ -2,8 +2,9 @@
 Redis Service
 Manages Redis connection pool and caching operations for TTS audio
 """
+import json
 import redis.asyncio as aioredis
-from typing import Optional
+from typing import Any, Optional
 from loguru import logger
 from app.config import Settings
 
@@ -64,7 +65,25 @@ class RedisService:
         except Exception as e:
             logger.warning(f"Redis SET failed for {key}: {e}")
             return False
-    
+
+    async def get_json(self, key: str, prefix: str = "lingai") -> Optional[Any]:
+        """Get JSON-serialized value from Redis. Returns deserialized object or None."""
+        full_key = f"{prefix}:{key}"
+        raw = await self.get(full_key)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.warning(f"Redis JSON decode failed for {full_key}: {e}")
+            return None
+
+    async def set_json(self, key: str, value: Any, ttl: Optional[int] = None, prefix: str = "lingai") -> bool:
+        """Set JSON-serialized value with optional TTL."""
+        full_key = f"{prefix}:{key}"
+        data = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        return await self.set(full_key, data, ttl=ttl)
+
     async def exists(self, key: str) -> bool:
         """Check if key exists."""
         if not self.available or not self.client:
