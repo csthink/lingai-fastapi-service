@@ -85,6 +85,26 @@ class RedisService:
             logger.warning(f"Redis KEYS failed: {e}")
             return []
 
+    async def hincrby(self, key: str, field: str, amount: int = 1) -> int:
+        """Increment hash field by amount."""
+        if not self.available or not self.client:
+            return 0
+        try:
+            return await self.client.hincrby(key, field, amount)
+        except Exception as e:
+            logger.warning(f"Redis HINCRBY failed for {key}.{field}: {e}")
+            return 0
+
+    async def hgetall(self, key: str) -> dict:
+        """Get all fields and values of a hash."""
+        if not self.available or not self.client:
+            return {}
+        try:
+            return await self.client.hgetall(key)
+        except Exception as e:
+            logger.warning(f"Redis HGETALL failed for {key}: {e}")
+            return {}
+
 
 # Global instance
 _redis_service: Optional[RedisService] = None

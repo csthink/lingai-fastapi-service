@@ -139,8 +139,8 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/stats/batch` | 批量上报学习事件 |
-| GET | `/api/stats/summary` | 获取统计摘要（调试用） |
+| POST | `/api/stats/batch` | 批量上报学习事件（Redis 聚合计数） |
+| GET | `/api/stats/summary?device_id=xxx` | 获取统计摘要（支持按设备或全局查询） |
 
 ### 🤖 AI 助手（`/api/spirit`）
 
