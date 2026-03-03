@@ -76,9 +76,13 @@ cp .env.example .env
 | `ALIYUN_ACCESS_KEY_ID` | 阿里云 TTS AccessKey | 生产必填 |
 | `ALIYUN_ACCESS_KEY_SECRET` | 阿里云 TTS Secret | 生产必填 |
 | `ALIYUN_TTS_APP_KEY` | 阿里云 TTS AppKey | 生产必填 |
+| `ALIYUN_VOICE_KO` | 韩语音色（默认 `xiaoyun`） | 可选 |
+| `ALIYUN_VOICE_ZH` | 中文音色（默认 `xiaoyun`） | 可选 |
 | `REDIS_URL` | Redis 连接地址 | ✅ |
 | `DATA_DIR` | 数据文件目录（默认 `./data`） | 可选 |
 | `AUDIO_CACHE_DIR` | TTS 音频缓存目录 | 可选 |
+| `TTS_PROVIDER` | TTS 主链路（`aliyun` / `edge`，默认 `aliyun`） | 可选 |
+| `TTS_FALLBACK_ENABLED` | 主链路失败时是否降级到 Edge（默认 `true`） | 可选 |
 | `DEBUG` | 调试模式（默认 `true`） | 可选 |
 
 > [!CAUTION]

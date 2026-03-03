@@ -46,10 +46,15 @@ async def text_to_speech(request: TTSRequest):
     
     try:
         result = await tts_service.synthesize(request.text, request.lang)
-        return TTSResponse(
+        response = TTSResponse(
             audio_url=result.get("audio_url"),
             duration_ms=result.get("duration_ms"),
             cached=result.get("cached", False)
+        )
+        return Response(
+            content=response.model_dump_json(),
+            media_type="application/json",
+            headers={"X-TTS-Provider": tts_service.last_provider},
         )
     except Exception as e:
         logger.error(f"TTS synthesis failed: {e}")
@@ -72,7 +77,11 @@ async def text_to_speech_audio(request: TTSRequest):
 
     try:
         audio_data = await tts_service.synthesize_audio(request.text, request.lang)
-        return Response(content=audio_data, media_type="audio/mpeg")
+        return Response(
+            content=audio_data,
+            media_type="audio/mpeg",
+            headers={"X-TTS-Provider": tts_service.last_provider},
+        )
     except Exception as e:
         logger.error(f"TTS audio synthesis failed: {e}")
         raise HTTPException(status_code=503, detail="TTS service unavailable")
@@ -94,7 +103,11 @@ async def text_to_speech_get(
 
     try:
         audio_data = await tts_service.synthesize_audio(text, lang)
-        return Response(content=audio_data, media_type="audio/mpeg")
+        return Response(
+            content=audio_data,
+            media_type="audio/mpeg",
+            headers={"X-TTS-Provider": tts_service.last_provider},
+        )
     except Exception as e:
         logger.error(f"TTS GET playback failed: {e}")
         raise HTTPException(status_code=503, detail="TTS service unavailable")

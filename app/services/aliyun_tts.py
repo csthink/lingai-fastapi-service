@@ -3,7 +3,10 @@ Alibaba Cloud TTS Service
 Provides Korean text-to-speech synthesis with Redis + File caching
 """
 import os
+import asyncio
 import hashlib
+import json
+import time
 from typing import Dict, Any, Optional
 from loguru import logger
 import httpx
@@ -32,6 +35,8 @@ class AliyunTTSService:
         self.settings = settings
         self.cache_dir = settings.audio_cache_dir
         self.redis = get_redis_service()
+        self.last_provider: str = "unknown"
+        self._token_cache: Dict[str, Any] = {"token": "", "expire": 0}
         os.makedirs(self.cache_dir, exist_ok=True)
     
     def _get_cache_key(self, text: str, lang: str) -> str:
@@ -131,24 +136,89 @@ class AliyunTTSService:
         
         return audio_data
     
+    # ── Aliyun Token management ──────────────────────────────────────
+    
+    async def _get_aliyun_token(self) -> str:
+        """Get Aliyun NLS token with in-memory caching."""
+        now = int(time.time())
+        if self._token_cache["token"] and now < self._token_cache["expire"] - 60:
+            return self._token_cache["token"]
+        
+        def _create():
+            from aliyunsdkcore.client import AcsClient
+            from aliyunsdkcore.request import CommonRequest
+            
+            client = AcsClient(
+                self.settings.aliyun_access_key_id,
+                self.settings.aliyun_access_key_secret,
+                self.settings.aliyun_region,
+            )
+            req = CommonRequest()
+            req.set_method("POST")
+            req.set_domain("nls-meta.cn-shanghai.aliyuncs.com")
+            req.set_version("2019-02-28")
+            req.set_action_name("CreateToken")
+            raw = client.do_action_with_exception(req)
+            data = json.loads(raw.decode("utf-8"))
+            return data["Token"]["Id"], int(data["Token"]["ExpireTime"])
+        
+        logger.info("Refreshing Aliyun NLS token ...")
+        token, expire = await asyncio.to_thread(_create)
+        self._token_cache = {"token": token, "expire": expire}
+        logger.info(f"Aliyun NLS token refreshed, expires at {expire}")
+        return token
+    
+    # ── Aliyun REST TTS ──────────────────────────────────────────────
+    
+    async def _call_aliyun_tts(self, text: str, lang: str) -> bytes:
+        """Call Aliyun NLS REST TTS endpoint."""
+        token = await self._get_aliyun_token()
+        voice = self.settings.aliyun_voice_ko if lang == "ko" else self.settings.aliyun_voice_zh
+        params = {
+            "token": token,
+            "appkey": self.settings.aliyun_tts_app_key,
+            "text": text,
+            "format": "mp3",
+            "sample_rate": 16000,
+            "voice": voice,
+        }
+        async with httpx.AsyncClient(timeout=self.settings.tts_timeout) as client:
+            resp = await client.get(self.settings.aliyun_nls_endpoint, params=params)
+        ct = resp.headers.get("content-type", "")
+        if resp.status_code != 200 or "audio" not in ct:
+            raise RuntimeError(
+                f"Aliyun TTS failed: status={resp.status_code}, lang={lang}, voice={voice}, body={resp.text[:200]}"
+            )
+        self.last_provider = "aliyun"
+        return resp.content
+    
+    # ── Provider dispatch ────────────────────────────────────────────
+    
     async def _call_tts_api(self, text: str, lang: str) -> bytes:
         """
-        Call TTS API.
+        Call TTS API with provider routing.
         
-        Priority:
-        1. Alibaba Cloud TTS (if configured)
-        2. Edge TTS (free fallback for POC)
+        Priority (configurable via tts_provider):
+        1. Alibaba Cloud TTS (default)
+        2. Edge TTS (fallback / dev-only)
         """
-        # If Aliyun not configured, use fallback directly
-        if not self.settings.aliyun_access_key_id:
-            logger.info("Aliyun TTS not configured, using Edge TTS fallback")
+        # Explicit Edge-only mode
+        if self.settings.tts_provider == "edge":
+            logger.info("TTS provider=edge, using Edge TTS directly")
+            self.last_provider = "edge"
             return await self._fallback_tts(text, lang)
         
-        # TODO: Implement actual Aliyun TTS API call
-        # Reference: https://help.aliyun.com/document_detail/84435.html
-        # For now, still use fallback
-        logger.info("Using Edge TTS (Aliyun TTS not yet implemented)")
-        return await self._fallback_tts(text, lang)
+        # Aliyun primary
+        try:
+            audio = await self._call_aliyun_tts(text, lang)
+            return audio
+        except Exception as e:
+            logger.warning(f"Aliyun TTS error: {e}")
+            if not self.settings.tts_fallback_enabled:
+                raise
+            logger.info("Falling back to Edge TTS")
+            self.last_provider = "edge"
+            return await self._fallback_tts(text, lang)
     
     async def _fallback_tts(self, text: str, lang: str) -> bytes:
         """
