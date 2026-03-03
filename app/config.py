@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     tts_redis_ttl: int = 7 * 24 * 3600  # 7 days
     tts_preload_enabled: bool = True
     
+    # CORS（生产默认关闭，dev 通过 .env 显式开启）
+    cors_enabled: bool = False
+    cors_allow_origins: str = ""                  # 逗号分隔白名单，如 "http://localhost:3000,https://app.example.com"
+    cors_allow_credentials: bool = False
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

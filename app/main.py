@@ -103,14 +103,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware for development
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # POC: allow all origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS middleware — 仅在显式启用且白名单非空时挂载
+_settings = get_settings()
+if _settings.cors_enabled:
+    _origins = [o.strip() for o in _settings.cors_allow_origins.split(",") if o.strip()]
+    if _origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=_origins,
+            allow_credentials=_settings.cors_allow_credentials,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        logger.info("CORS enabled for origins: {}", _origins)
+    else:
+        logger.warning("CORS_ENABLED=true but CORS_ALLOW_ORIGINS is empty — CORS middleware NOT mounted")
+else:
+    logger.info("CORS disabled (default)")
 
 # Trace middleware — must be added after CORS so trace_id covers all routes
 app.add_middleware(TraceMiddleware)
