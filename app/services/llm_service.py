@@ -485,3 +485,9 @@ class LLMService:
         
         return result or "翻译失败"
 
+    async def close(self):
+        """Close underlying HTTP clients on shutdown."""
+        if self.deepseek_client:
+            await self.deepseek_client.close()
+        if self.qwen_client:
+            await self.qwen_client.close()

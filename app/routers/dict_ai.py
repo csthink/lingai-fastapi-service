@@ -5,7 +5,7 @@ Provides AI-enhanced dictionary lookup via Deepseek/Qwen
 import json
 import os
 import re
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Any
@@ -15,6 +15,7 @@ from app.services.llm_service import LLMService
 from app.services.dict_service import DictService
 from app.services.redis_service import get_redis_service
 from app.config import get_settings
+from app.dependencies import get_llm_service
 
 
 router = APIRouter()
@@ -127,7 +128,8 @@ class DictSearchResponse(BaseModel):
 @router.get("/search")
 async def search_dict(
     query: str = Query(..., min_length=1, max_length=50),
-    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$")
+    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$"),
+    llm_service: LLMService = Depends(get_llm_service),
 ):
     """
     Dictionary search endpoint (LLM-only mode).
@@ -151,7 +153,6 @@ async def search_dict(
     else:
         actual_direction = direction
 
-    settings = get_settings()
     redis = get_redis_service()
     cache_key = f"dict_search:{query}:{actual_direction}"
     
@@ -163,7 +164,6 @@ async def search_dict(
     
     # Cache miss - call LLM
     logger.info(f"Cache miss for: {query}, calling LLM")
-    llm_service = LLMService(settings)
     
     try:
         ai_result = await llm_service.get_dict_supplement(
@@ -210,7 +210,8 @@ async def search_dict(
 @router.get("/search/stream")
 async def search_dict_stream(
     query: str = Query(..., min_length=1, max_length=50),
-    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$")
+    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$"),
+    llm_service: LLMService = Depends(get_llm_service),
 ):
     """
     SSE streaming dictionary search endpoint.
@@ -234,7 +235,6 @@ async def search_dict_stream(
     else:
         actual_direction = direction
 
-    settings = get_settings()
     redis = get_redis_service()
     cache_key = f"dict_search:{query}:{actual_direction}"
     
@@ -248,7 +248,6 @@ async def search_dict_stream(
         
         # Cache miss - stream from LLM
         logger.info(f"Stream: Cache miss for {query}, streaming from LLM")
-        llm_service = LLMService(settings)
         
         # Build prompt (complete version with Chinese requirements)
         if actual_direction == "ko2zh":
@@ -374,7 +373,10 @@ async def search_dict_stream(
 
 
 @router.post("/ai", response_model=DictAIResponse)
-async def dict_ai_lookup(request: DictAIRequest):
+async def dict_ai_lookup(
+    request: DictAIRequest,
+    llm_service: LLMService = Depends(get_llm_service),
+):
     """
     Get AI-enhanced dictionary information for a word.
     
@@ -386,9 +388,6 @@ async def dict_ai_lookup(request: DictAIRequest):
     """
     if not request.word or len(request.word) > 50:
         raise HTTPException(status_code=400, detail="Word must be 1-50 characters")
-    
-    settings = get_settings()
-    llm_service = LLMService(settings)
     
     try:
         result = await llm_service.get_dict_supplement(
@@ -403,7 +402,11 @@ async def dict_ai_lookup(request: DictAIRequest):
 
 
 @router.post("/mnemonic")
-async def generate_mnemonic(word: str, meaning: str):
+async def generate_mnemonic(
+    word: str,
+    meaning: str,
+    llm_service: LLMService = Depends(get_llm_service),
+):    
     """
     Generate AI mnemonic content for vocabulary learning.
     
@@ -412,8 +415,6 @@ async def generate_mnemonic(word: str, meaning: str):
     
     Returns TOPIK-style example sentences and related words.
     """
-    settings = get_settings()
-    llm_service = LLMService(settings)
     
     try:
         result = await llm_service.generate_mnemonic(word, meaning)
@@ -433,7 +434,8 @@ class QuickTranslateResponse(BaseModel):
 @router.get("/quick-translate")
 async def quick_translate(
     word: str = Query(..., min_length=1, max_length=50),
-    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$")
+    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$"),
+    llm_service: LLMService = Depends(get_llm_service),
 ):
     """
     Quick translate a word - returns only translation result.
@@ -470,7 +472,6 @@ async def quick_translate(
                 )
     
     # Not found in local, use LLM
-    settings = get_settings()
     redis = get_redis_service()
     cache_key = f"quick_translate:{word}:{actual_direction}"
     
@@ -484,7 +485,6 @@ async def quick_translate(
         )
     
     # Call LLM for quick translation
-    llm_service = LLMService(settings)
     try:
         translation = await llm_service.quick_translate(word, actual_direction)
         

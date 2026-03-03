@@ -2,13 +2,13 @@
 Spirit Chat Router
 AI韩语学习助手多轮对话接口
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 from loguru import logger
 
 from app.services.llm_service import LLMService
-from app.config import get_settings
+from app.dependencies import get_llm_service
 
 router = APIRouter()
 
@@ -49,7 +49,10 @@ class SpiritChatResponse(BaseModel):
 
 
 @router.post("/chat", response_model=SpiritChatResponse)
-async def spirit_chat(request: SpiritChatRequest):
+async def spirit_chat(
+    request: SpiritChatRequest,
+    llm_service: LLMService = Depends(get_llm_service),
+):
     """
     多轮对话接口
     
@@ -57,9 +60,6 @@ async def spirit_chat(request: SpiritChatRequest):
     """
     if not request.messages:
         raise HTTPException(status_code=400, detail="Messages cannot be empty")
-    
-    settings = get_settings()
-    llm_service = LLMService(settings)
     
     try:
         # 构建对话历史

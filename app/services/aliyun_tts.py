@@ -35,9 +35,12 @@ class AliyunTTSService:
         self.settings = settings
         self.cache_dir = settings.audio_cache_dir
         self.redis = get_redis_service()
-        self.last_provider: str = "unknown"
         self._token_cache: Dict[str, Any] = {"token": "", "expire": 0}
         os.makedirs(self.cache_dir, exist_ok=True)
+
+    async def close(self):
+        """Release resources on shutdown (reserved for future long-lived clients)."""
+        pass
     
     def _get_cache_key(self, text: str, lang: str) -> str:
         """Generate cache key for Redis and file."""
@@ -79,23 +82,27 @@ class AliyunTTSService:
         Synthesize text to speech (returns metadata).
         """
         # Get audio first
-        await self.synthesize_audio(text, lang)
+        _audio, provider = await self.synthesize_audio(text, lang)
         cache_path = self._get_cache_path(text, lang)
         
         return {
             "audio_url": f"file://{cache_path}",
             "duration_ms": self._estimate_duration(text, lang),
-            "cached": True
+            "cached": True,
+            "provider": provider,
         }
     
-    async def synthesize_audio(self, text: str, lang: str = "ko") -> bytes:
+    async def synthesize_audio(self, text: str, lang: str = "ko") -> tuple:
         """
-        Synthesize text and return audio bytes.
+        Synthesize text and return (audio_bytes, provider).
         
         Three-layer cache strategy:
         1. L1 Redis cache (hot data, memory)
         2. L2 File cache (full data, disk)
         3. L3 TTS API (real-time synthesis)
+        
+        Returns:
+            tuple[bytes, str]: (audio_data, provider)
         """
         redis_key = self._get_redis_key(text, lang)
         
@@ -104,7 +111,7 @@ class AliyunTTSService:
             cached_audio = await self.redis.get(redis_key)
             if cached_audio:
                 logger.debug(f"Redis cache HIT: {text[:20]}...")
-                return cached_audio
+                return cached_audio, "cache"
         
         # L2: Check file cache
         file_cached = self._check_file_cache(text, lang)
@@ -117,11 +124,11 @@ class AliyunTTSService:
                     file_cached, 
                     ttl=self.settings.tts_redis_ttl
                 )
-            return file_cached
+            return file_cached, "cache"
         
         # L3: Call TTS API for synthesis
         logger.info(f"TTS API synthesis: {text[:20]}...")
-        audio_data = await self._call_tts_api(text, lang)
+        audio_data, provider = await self._call_tts_api(text, lang)
         
         # Save to L2 file cache
         self._save_file_cache(text, lang, audio_data)
@@ -134,7 +141,7 @@ class AliyunTTSService:
                 ttl=self.settings.tts_redis_ttl
             )
         
-        return audio_data
+        return audio_data, provider
     
     # ── Aliyun Token management ──────────────────────────────────────
     
@@ -170,8 +177,8 @@ class AliyunTTSService:
     
     # ── Aliyun REST TTS ──────────────────────────────────────────────
     
-    async def _call_aliyun_tts(self, text: str, lang: str) -> bytes:
-        """Call Aliyun NLS REST TTS endpoint."""
+    async def _call_aliyun_tts(self, text: str, lang: str) -> tuple:
+        """Call Aliyun NLS REST TTS endpoint. Returns (bytes, provider)."""
         token = await self._get_aliyun_token()
         voice = self.settings.aliyun_voice_ko if lang == "ko" else self.settings.aliyun_voice_zh
         params = {
@@ -189,14 +196,14 @@ class AliyunTTSService:
             raise RuntimeError(
                 f"Aliyun TTS failed: status={resp.status_code}, lang={lang}, voice={voice}, body={resp.text[:200]}"
             )
-        self.last_provider = "aliyun"
-        return resp.content
+        return resp.content, "aliyun"
     
     # ── Provider dispatch ────────────────────────────────────────────
     
-    async def _call_tts_api(self, text: str, lang: str) -> bytes:
+    async def _call_tts_api(self, text: str, lang: str) -> tuple:
         """
         Call TTS API with provider routing.
+        Returns (bytes, provider_name).
         
         Priority (configurable via tts_provider):
         1. Alibaba Cloud TTS (default)
@@ -205,20 +212,19 @@ class AliyunTTSService:
         # Explicit Edge-only mode
         if self.settings.tts_provider == "edge":
             logger.info("TTS provider=edge, using Edge TTS directly")
-            self.last_provider = "edge"
-            return await self._fallback_tts(text, lang)
+            audio = await self._fallback_tts(text, lang)
+            return audio, "edge"
         
         # Aliyun primary
         try:
-            audio = await self._call_aliyun_tts(text, lang)
-            return audio
+            return await self._call_aliyun_tts(text, lang)
         except Exception as e:
             logger.warning(f"Aliyun TTS error: {e}")
             if not self.settings.tts_fallback_enabled:
                 raise
             logger.info("Falling back to Edge TTS")
-            self.last_provider = "edge"
-            return await self._fallback_tts(text, lang)
+            audio = await self._fallback_tts(text, lang)
+            return audio, "edge"
     
     async def _fallback_tts(self, text: str, lang: str) -> bytes:
         """

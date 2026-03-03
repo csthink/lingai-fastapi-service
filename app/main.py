@@ -15,6 +15,7 @@ import os
 from app.config import get_settings
 from app.routers import tts, dict_ai, content, stats, spirit, sse_test
 from app.services.redis_service import init_redis, close_redis
+from app.dependencies import init_services, close_services
 
 
 @asynccontextmanager
@@ -34,10 +35,14 @@ async def lifespan(app: FastAPI):
     
     # Initialize Redis for TTS caching
     await init_redis(settings)
+
+    # Initialize service singletons (LLM / TTS)
+    init_services(settings)
     
     yield
     
     # Shutdown
+    await close_services()
     await close_redis()
     logger.info("LingAI Backend shutting down...")
 
