@@ -11,12 +11,12 @@ from app.config import get_settings
 from app.routers import tts, dict_ai, content, stats, spirit, sse_test
 from app.services.redis_service import init_redis, close_redis
 
+settings = get_settings()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    settings = get_settings()
-    
     # Startup
     logger.info("LingAI Backend starting...")
     
@@ -46,13 +46,15 @@ app = FastAPI(
 )
 
 # CORS middleware for development
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # POC: allow all origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if settings.cors_enabled:
+    allow_origins = settings.cors_origins_list or ["*"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allow_origins,
+        allow_credentials=settings.cors_allow_credentials,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Include routers
 app.include_router(tts.router, prefix="/api/tts", tags=["TTS"])

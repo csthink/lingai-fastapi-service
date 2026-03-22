@@ -1,10 +1,9 @@
 """
 LingAI Backend Configuration
 """
-import os
 from functools import lru_cache
 from pydantic_settings import BaseSettings
-from typing import Optional
+from pydantic_settings import SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -26,6 +25,8 @@ class Settings(BaseSettings):
     aliyun_access_key_id: str = ""
     aliyun_access_key_secret: str = ""
     aliyun_tts_app_key: str = ""
+    aliyun_voice_ko: str = "xiaoyun"
+    aliyun_voice_zh: str = "xiaoyun"
     
     # Data paths
     data_dir: str = "./data"
@@ -37,14 +38,32 @@ class Settings(BaseSettings):
     
     # Redis
     redis_url: str = "redis://:**@localhost:10399/0"
+
+    # CORS
+    cors_enabled: bool = False
+    cors_allow_origins: str = ""
+    cors_allow_credentials: bool = False
     
     # TTS Redis Cache
     tts_redis_ttl: int = 7 * 24 * 3600  # 7 days
     tts_preload_enabled: bool = True
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse comma-separated CORS origins."""
+        if not self.cors_allow_origins.strip():
+            return []
+        return [
+            origin.strip()
+            for origin in self.cors_allow_origins.split(",")
+            if origin.strip()
+        ]
 
 
 @lru_cache()
