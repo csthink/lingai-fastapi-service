@@ -152,7 +152,7 @@ async def search_dict(
         actual_direction = direction
 
     settings = get_settings()
-    cache = get_cache(settings.redis_url)
+    cache = get_cache(settings)
     cache_key = f"dict_search:{query}:{actual_direction}"
     
     # Check cache first
@@ -237,7 +237,7 @@ async def search_dict_stream(
         actual_direction = direction
 
     settings = get_settings()
-    cache = get_cache(settings.redis_url)
+    cache = get_cache(settings)
     cache_key = f"dict_search:{query}:{actual_direction}"
     
     async def generate_sse():
@@ -472,7 +472,7 @@ async def quick_translate(
     
     # Not found in local, use LLM
     settings = get_settings()
-    cache = get_cache(settings.redis_url)
+    cache = get_cache(settings)
     cache_key = f"quick_translate:{word}:{actual_direction}"
     
     # Check cache
@@ -504,4 +504,3 @@ async def quick_translate(
             translation="翻译失败",
             source='error'
         )
-

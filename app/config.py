@@ -2,6 +2,7 @@
 LingAI Backend Configuration
 """
 from functools import lru_cache
+from typing import Any
 from pydantic_settings import BaseSettings
 from pydantic_settings import SettingsConfigDict
 
@@ -37,7 +38,13 @@ class Settings(BaseSettings):
     tts_timeout: int = 10
     
     # Redis
-    redis_url: str = "redis://:**@localhost:10399/0"
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_password: str = ""
+    redis_db: int = 0
+    redis_prefix: str = "lingai"
+    redis_socket_timeout: float = 5.0
+    redis_connect_timeout: float = 5.0
 
     # CORS
     cors_enabled: bool = False
@@ -64,6 +71,39 @@ class Settings(BaseSettings):
             for origin in self.cors_allow_origins.split(",")
             if origin.strip()
         ]
+
+    @property
+    def redis_endpoint(self) -> str:
+        """Return a safe-to-log Redis endpoint string."""
+        return f"{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def redis_base_kwargs(self) -> dict[str, Any]:
+        """Shared Redis connection kwargs."""
+        kwargs: dict[str, Any] = {
+            "host": self.redis_host,
+            "port": self.redis_port,
+            "db": self.redis_db,
+        }
+        if self.redis_password:
+            kwargs["password"] = self.redis_password
+        return kwargs
+
+    @property
+    def redis_sync_kwargs(self) -> dict[str, Any]:
+        """Redis kwargs for sync clients."""
+        kwargs = self.redis_base_kwargs.copy()
+        kwargs["decode_responses"] = True
+        return kwargs
+
+    @property
+    def redis_async_kwargs(self) -> dict[str, Any]:
+        """Redis kwargs for async clients."""
+        kwargs = self.redis_base_kwargs.copy()
+        kwargs["decode_responses"] = False
+        kwargs["socket_timeout"] = self.redis_socket_timeout
+        kwargs["socket_connect_timeout"] = self.redis_connect_timeout
+        return kwargs
 
 
 @lru_cache()

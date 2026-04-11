@@ -52,7 +52,8 @@ def get_cached_words(cache: RedisCache) -> Set[str]:
         cached = set()
         for key in keys:
             # Extract word from key
-            parts = key.decode().split(':')
+            normalized_key = key.decode() if isinstance(key, bytes) else key
+            parts = normalized_key.split(':')
             if len(parts) >= 2:
                 cached.add(parts[1])
         return cached
@@ -199,7 +200,7 @@ async def main():
     # Initialize services
     settings = get_settings()
     llm_service = LLMService(settings)
-    cache = RedisCache(settings.redis_url)
+    cache = RedisCache(settings)
     
     # Define level files
     level_files = {

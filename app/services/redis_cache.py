@@ -7,6 +7,8 @@ import redis
 from typing import Any, Optional
 from loguru import logger
 
+from app.config import Settings, get_settings
+
 
 class RedisCache:
     """
@@ -21,10 +23,11 @@ class RedisCache:
     
     _instance: Optional['RedisCache'] = None
     _pool: Optional[redis.ConnectionPool] = None
-    
-    def __init__(self, redis_url: str = "redis://:**@localhost:10399/0", prefix: str = "lingai"):
-        self._prefix = prefix
-        self._redis_url = redis_url
+    _config_signature: Optional[tuple[str, int, int, str, str]] = None
+
+    def __init__(self, settings: Settings):
+        self._settings = settings
+        self._prefix = settings.redis_prefix
         self._client: Optional[redis.Redis] = None
         self._connect()
     
@@ -32,23 +35,42 @@ class RedisCache:
         """建立Redis连接"""
         try:
             if RedisCache._pool is None:
-                RedisCache._pool = redis.ConnectionPool.from_url(
-                    self._redis_url,
-                    decode_responses=True
-                )
+                RedisCache._pool = redis.ConnectionPool(**self._settings.redis_sync_kwargs)
             self._client = redis.Redis(connection_pool=RedisCache._pool)
             # 测试连接
             self._client.ping()
-            logger.info(f"Redis connected: {self._redis_url}")
+            logger.info("Redis connected: {}", self._settings.redis_endpoint)
         except Exception as e:
-            logger.error(f"Redis connection failed: {e}")
+            logger.error("Redis connection failed for {}: {}", self._settings.redis_endpoint, e)
             self._client = None
     
     @classmethod
-    def get_instance(cls, redis_url: str = "redis://:**@localhost:10399/0") -> 'RedisCache':
+    def _build_signature(cls, settings: Settings) -> tuple[str, int, int, str, str]:
+        return (
+            settings.redis_host,
+            settings.redis_port,
+            settings.redis_db,
+            settings.redis_password,
+            settings.redis_prefix,
+        )
+
+    @classmethod
+    def _reset_singleton(cls) -> None:
+        if cls._pool is not None:
+            cls._pool.disconnect()
+        cls._pool = None
+        cls._instance = None
+        cls._config_signature = None
+
+    @classmethod
+    def get_instance(cls, settings: Optional[Settings] = None) -> 'RedisCache':
         """获取单例实例"""
-        if cls._instance is None:
-            cls._instance = RedisCache(redis_url)
+        settings = settings or get_settings()
+        signature = cls._build_signature(settings)
+        if cls._instance is None or cls._config_signature != signature:
+            cls._reset_singleton()
+            cls._instance = RedisCache(settings)
+            cls._config_signature = signature
         return cls._instance
     
     def _make_key(self, key: str) -> str:
@@ -139,12 +161,6 @@ class RedisCache:
             return False
 
 
-# 便捷函数
-_cache_instance: Optional[RedisCache] = None
-
-def get_cache(redis_url: str = "redis://:**@localhost:10399/0") -> RedisCache:
+def get_cache(settings: Optional[Settings] = None) -> RedisCache:
     """获取缓存服务实例"""
-    global _cache_instance
-    if _cache_instance is None:
-        _cache_instance = RedisCache(redis_url)
-    return _cache_instance
+    return RedisCache.get_instance(settings)

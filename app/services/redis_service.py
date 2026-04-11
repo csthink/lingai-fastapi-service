@@ -17,21 +17,20 @@ class RedisService:
         self.available: bool = False
     
     async def connect(self):
-        """Initialize Redis connection from URL."""
+        """Initialize Redis connection from settings."""
         try:
-            self.client = aioredis.from_url(
-                self.settings.redis_url,
-                decode_responses=False,  # Keep binary data for audio
-                socket_timeout=5.0,
-                socket_connect_timeout=5.0
-            )
-            
+            self.client = aioredis.Redis(**self.settings.redis_async_kwargs)
+
             # Test connection
             await self.client.ping()
             self.available = True
-            logger.info("Redis connected successfully")
+            logger.info("Redis connected successfully: {}", self.settings.redis_endpoint)
         except Exception as e:
-            logger.warning(f"Redis connection failed: {e}. Will use file cache only.")
+            logger.warning(
+                "Redis connection failed for {}: {}. Will use file cache only.",
+                self.settings.redis_endpoint,
+                e,
+            )
             self.client = None
             self.available = False
     

@@ -76,7 +76,11 @@ cp .env.example .env
 | `ALIYUN_ACCESS_KEY_ID` | 阿里云 TTS AccessKey | 生产必填 |
 | `ALIYUN_ACCESS_KEY_SECRET` | 阿里云 TTS Secret | 生产必填 |
 | `ALIYUN_TTS_APP_KEY` | 阿里云 TTS AppKey | 生产必填 |
-| `REDIS_URL` | Redis 连接地址 | ✅ |
+| `REDIS_HOST` | Redis 主机地址 | ✅ |
+| `REDIS_PORT` | Redis 端口 | ✅ |
+| `REDIS_PASSWORD` | Redis 密码 | 按环境配置 |
+| `REDIS_DB` | Redis 数据库编号（默认 `0`） | 可选 |
+| `REDIS_PREFIX` | Redis 键前缀（默认 `lingai`） | 可选 |
 | `DATA_DIR` | 数据文件目录（默认 `./data`） | 可选 |
 | `AUDIO_CACHE_DIR` | TTS 音频缓存目录 | 可选 |
 | `DEBUG` | 调试模式（默认 `true`） | 可选 |
