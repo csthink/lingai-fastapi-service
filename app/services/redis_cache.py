@@ -23,7 +23,7 @@ class RedisCache:
     
     _instance: Optional['RedisCache'] = None
     _pool: Optional[redis.ConnectionPool] = None
-    _config_signature: Optional[tuple[str, int, int, str, str]] = None
+    _config_signature: Optional[tuple[str, int, int, str, str, float, float]] = None
 
     def __init__(self, settings: Settings):
         self._settings = settings
@@ -45,13 +45,15 @@ class RedisCache:
             self._client = None
     
     @classmethod
-    def _build_signature(cls, settings: Settings) -> tuple[str, int, int, str, str]:
+    def _build_signature(cls, settings: Settings) -> tuple[str, int, int, str, str, float, float]:
         return (
             settings.redis_host,
             settings.redis_port,
             settings.redis_db,
             settings.redis_password,
             settings.redis_prefix,
+            settings.redis_socket_timeout,
+            settings.redis_connect_timeout,
         )
 
     @classmethod
@@ -75,7 +77,7 @@ class RedisCache:
     
     def _make_key(self, key: str) -> str:
         """构建带前缀的键"""
-        return f"{self._prefix}:{key}"
+        return f"{self._prefix}:{key}" if self._prefix else key
     
     def get(self, key: str) -> Optional[Any]:
         """

@@ -483,5 +483,13 @@ class LLMService:
         if result:
             result = result.strip().strip('"').strip("'").strip()
         
-        return result or "翻译失败"
+        if not result:
+            raise RuntimeError("Translation provider returned no content")
+        return result
 
+    async def close(self):
+        """Close underlying HTTP clients on shutdown."""
+        if self.deepseek_client:
+            await self.deepseek_client.close()
+        if self.qwen_client:
+            await self.qwen_client.close()

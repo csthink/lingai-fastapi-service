@@ -2,10 +2,15 @@
 Redis Service
 Manages Redis connection pool and caching operations for TTS audio
 """
+import json
 import redis.asyncio as aioredis
-from typing import Optional
+from typing import Any, Optional
 from loguru import logger
 from app.config import Settings
+
+
+class RedisStorageError(RuntimeError):
+    """A required Redis operation could not be completed."""
 
 
 class RedisService:
@@ -37,7 +42,7 @@ class RedisService:
     async def disconnect(self):
         """Close Redis connection."""
         if self.client:
-            await self.client.close()
+            await self.client.aclose()
             logger.info("Redis disconnected")
     
     async def get(self, key: str) -> Optional[bytes]:
@@ -63,7 +68,27 @@ class RedisService:
         except Exception as e:
             logger.warning(f"Redis SET failed for {key}: {e}")
             return False
-    
+
+    async def get_json(self, key: str, prefix: Optional[str] = None) -> Optional[Any]:
+        """Get JSON-serialized value from Redis. Returns deserialized object or None."""
+        selected_prefix = self.settings.redis_prefix if prefix is None else prefix
+        full_key = f"{selected_prefix}:{key}" if selected_prefix else key
+        raw = await self.get(full_key)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.warning(f"Redis JSON decode failed for {full_key}: {e}")
+            return None
+
+    async def set_json(self, key: str, value: Any, ttl: Optional[int] = None, prefix: Optional[str] = None) -> bool:
+        """Set JSON-serialized value with optional TTL."""
+        selected_prefix = self.settings.redis_prefix if prefix is None else prefix
+        full_key = f"{selected_prefix}:{key}" if selected_prefix else key
+        data = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        return await self.set(full_key, data, ttl=ttl)
+
     async def exists(self, key: str) -> bool:
         """Check if key exists."""
         if not self.available or not self.client:
@@ -83,6 +108,26 @@ class RedisService:
         except Exception as e:
             logger.warning(f"Redis KEYS failed: {e}")
             return []
+
+    async def hincrby(self, key: str, field: str, amount: int = 1) -> int:
+        """Increment a hash field; never acknowledge a failed statistics write."""
+        if not self.available or not self.client:
+            raise RedisStorageError("Statistics storage unavailable")
+        try:
+            return await self.client.hincrby(key, field, amount)
+        except Exception as error:
+            logger.warning("Redis HINCRBY failed ({})", type(error).__name__)
+            raise RedisStorageError("Statistics storage unavailable") from None
+
+    async def hgetall(self, key: str) -> dict:
+        """Read hash fields, distinguishing an empty hash from a read failure."""
+        if not self.available or not self.client:
+            raise RedisStorageError("Statistics storage unavailable")
+        try:
+            return await self.client.hgetall(key)
+        except Exception as error:
+            logger.warning("Redis HGETALL failed ({})", type(error).__name__)
+            raise RedisStorageError("Statistics storage unavailable") from None
 
 
 # Global instance

@@ -3,41 +3,15 @@ Content Router
 Provides lesson content download API
 """
 from fastapi import APIRouter, HTTPException, Path
-from pydantic import BaseModel
-from typing import List, Dict, Optional, Any
 from loguru import logger
 import json
 import os
 
 from app.config import get_settings
+from app.models.content import LessonContent
 
 
 router = APIRouter()
-
-
-class WordEntry(BaseModel):
-    """Word entry model."""
-    id: int
-    hangul: str
-    romanization: Optional[str] = None
-    pos: Optional[str] = None
-    primary_meaning: str
-    senses: List[Dict[str, Any]] = []
-    collocations: List[str] = []
-    examples: List[Dict[str, str]] = []
-    topik_level: int
-    freq_rank: Optional[int] = None
-    lesson_id: int
-
-
-class LessonContent(BaseModel):
-    """Lesson content model."""
-    lesson_id: int
-    level: int
-    title: str
-    words: List[WordEntry]
-    audio_urls: Dict[str, str] = {}  # word_id -> audio_url
-    ai_mnemonics: Dict[str, Any] = {}  # word_id -> mnemonic data
 
 
 @router.get("/lesson/{lesson_id}", response_model=LessonContent)

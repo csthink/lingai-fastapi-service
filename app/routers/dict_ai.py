@@ -5,16 +5,22 @@ Provides AI-enhanced dictionary lookup via Deepseek/Qwen
 import json
 import os
 import re
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from typing import Optional, List, Any
+from typing import List
 from loguru import logger
 
 from app.services.llm_service import LLMService
 from app.services.dict_service import DictService
-from app.services.redis_cache import get_cache
+from app.services.redis_service import get_redis_service
 from app.config import get_settings
+from app.dependencies import get_llm_service
+from app.models.dict_ai import (
+    DictAIRequest,
+    DictAIResponse,
+    DictSearchResponse,
+    QuickTranslateResponse,
+)
 
 
 router = APIRouter()
@@ -44,90 +50,11 @@ def _load_words_data() -> List[dict]:
     return _words_data
 
 
-class DictAIRequest(BaseModel):
-    """Dictionary AI request model."""
-    word: str
-    direction: str = "ko2zh"  # ko2zh or zh2ko
-
-
-class ExampleSentence(BaseModel):
-    """Example sentence model."""
-    ko: str
-    zh: str
-    category: Optional[str] = None  # 场景分类
-
-
-class MeaningDetail(BaseModel):
-    """Meaning detail model."""
-    type: str  # 含义类型
-    explanation: str  # 详细解释
-
-
-class Collocation(BaseModel):
-    """Collocation model."""
-    phrase: str  # 韩语搭配
-    meaning: str  # 中文含义
-    example_ko: Optional[str] = None
-    example_zh: Optional[str] = None
-    
-    model_config = {
-        "populate_by_name": True,
-        "alias_generator": lambda s: ''.join(word.capitalize() if i else word for i, word in enumerate(s.split('_')))
-    }
-
-
-class SynonymWord(BaseModel):
-    """Synonym with difference explanation."""
-    word: str
-    meaning: str
-    difference: Optional[str] = None  # 区别说明
-
-
-class RelatedWord(BaseModel):
-    """Related word model."""
-    word: str
-    meaning: str
-
-
-class DictAIResponse(BaseModel):
-    """Dictionary AI response model - detailed version."""
-    ai_meaning: Optional[str] = None
-    word_type: Optional[str] = None  # 词性
-    hanja: Optional[str] = None  # 对应汉字
-    composition: Optional[str] = None  # 词语构成
-    meanings: List[MeaningDetail] = []  # 含义详解
-    collocations: List[Collocation] = []  # 常用搭配
-    ai_examples: List[ExampleSentence] = []  # 例句
-    synonyms: List[SynonymWord] = []  # 近义词
-    antonyms: List[RelatedWord] = []  # 反义词
-    related_words: List[RelatedWord] = []  # 扩展词汇
-    tips: Optional[str] = None  # 实用知识
-    error: Optional[str] = None
-    
-    model_config = {
-        "populate_by_name": True,
-        "alias_generator": lambda s: ''.join(word.capitalize() if i else word for i, word in enumerate(s.split('_')))
-    }
-
-
-class DictSearchResponse(BaseModel):
-    """Dictionary search response model."""
-    source: str  # 'local' or 'ai'
-    query: str
-    direction: str  # 'ko2zh' or 'zh2ko'
-    results: List[Any] = []  # Local word entries
-    ai_supplement: Optional[DictAIResponse] = None
-    
-    model_config = {
-        "populate_by_name": True,
-        "alias_generator": lambda s: ''.join(word.capitalize() if i else word for i, word in enumerate(s.split('_')))
-    }
-
-
 @router.get("/search")
 async def search_dict(
     query: str = Query(..., min_length=1, max_length=50),
-    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$")
+    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$"),
+    llm_service: LLMService = Depends(get_llm_service),
 ):
     """
     Dictionary search endpoint (LLM-only mode).
@@ -151,22 +78,17 @@ async def search_dict(
     else:
         actual_direction = direction
 
-    settings = get_settings()
-    cache = get_cache(settings)
+    redis = get_redis_service()
     cache_key = f"dict_search:{query}:{actual_direction}"
     
     # Check cache first
-    cached_result = cache.get(cache_key)
+    cached_result = await redis.get_json(cache_key) if redis else None
     if cached_result:
         logger.info(f"Cache hit for: {query}")
-        try:
-            return cached_result
-        except Exception as e:
-            logger.warning(f"Failed to parse cached result: {e}")
+        return cached_result
     
     # Cache miss - call LLM
     logger.info(f"Cache miss for: {query}, calling LLM")
-    llm_service = LLMService(settings)
     
     try:
         ai_result = await llm_service.get_dict_supplement(
@@ -174,6 +96,8 @@ async def search_dict(
             direction=actual_direction
         )
         
+        if not ai_result.get("ai_meaning"):
+            raise ValueError("Dictionary provider returned no meaning")
         ai_response = DictAIResponse(**ai_result)
         
         # Build response
@@ -188,31 +112,22 @@ async def search_dict(
         result_dict = response.model_dump(by_alias=True)
         
         # Cache the result
-        cache.set(cache_key, result_dict)
+        if redis:
+            await redis.set_json(cache_key, result_dict)
         logger.info(f"Cached result for: {query}")
         
         return result_dict
         
     except Exception as e:
-        logger.warning(f"LLM search failed: {e}")
-        import traceback
-        logger.warning(traceback.format_exc())
-        
-        # Return empty response on error
-        response = DictSearchResponse(
-            source='ai',
-            query=query,
-            direction=actual_direction,
-            results=[],
-            ai_supplement=None
-        )
-        return response.model_dump(by_alias=True)
+        logger.warning("LLM search failed ({})", type(e).__name__)
+        raise HTTPException(status_code=503, detail="Dictionary service unavailable") from None
 
 
 @router.get("/search/stream")
 async def search_dict_stream(
     query: str = Query(..., min_length=1, max_length=50),
-    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$")
+    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$"),
+    llm_service: LLMService = Depends(get_llm_service),
 ):
     """
     SSE streaming dictionary search endpoint.
@@ -236,13 +151,12 @@ async def search_dict_stream(
     else:
         actual_direction = direction
 
-    settings = get_settings()
-    cache = get_cache(settings)
+    redis = get_redis_service()
     cache_key = f"dict_search:{query}:{actual_direction}"
     
     async def generate_sse():
         # Check cache first
-        cached_result = cache.get(cache_key)
+        cached_result = await redis.get_json(cache_key) if redis else None
         if cached_result:
             logger.info(f"Stream: Cache hit for {query}")
             yield f"data: {json.dumps({'type': 'cached', 'data': cached_result}, ensure_ascii=False)}\n\n"
@@ -250,7 +164,6 @@ async def search_dict_stream(
         
         # Cache miss - stream from LLM
         logger.info(f"Stream: Cache miss for {query}, streaming from LLM")
-        llm_service = LLMService(settings)
         
         # Build prompt (complete version with Chinese requirements)
         if actual_direction == "ko2zh":
@@ -339,6 +252,8 @@ async def search_dict_stream(
                     json_text = re.sub(r'\s*```$', '', json_text)
                 
                 ai_result = json.loads(json_text)
+                if not ai_result.get("ai_meaning"):
+                    raise ValueError("Dictionary provider returned no meaning")
                 ai_response = DictAIResponse(**ai_result)
                 
                 response = DictSearchResponse(
@@ -351,17 +266,18 @@ async def search_dict_stream(
                 result_dict = response.model_dump(by_alias=True)
                 
                 # Cache the result
-                cache.set(cache_key, result_dict)
+                if redis:
+                    await redis.set_json(cache_key, result_dict)
                 logger.info(f"Stream: Cached result for {query}")
                 
                 yield f"data: {json.dumps({'type': 'done', 'data': result_dict}, ensure_ascii=False)}\n\n"
             except Exception as e:
-                logger.warning(f"Stream: Failed to parse response: {e}")
-                yield f"data: {json.dumps({'type': 'done', 'data': {'raw': full_response}}, ensure_ascii=False)}\n\n"
+                logger.warning("Stream: Invalid dictionary response ({})", type(e).__name__)
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Dictionary service unavailable'}, ensure_ascii=False)}\n\n"
                 
         except Exception as e:
-            logger.error(f"Stream: LLM error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            logger.error("Stream: LLM error ({})", type(e).__name__)
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Dictionary service unavailable'}, ensure_ascii=False)}\n\n"
     
     return StreamingResponse(
         generate_sse(),
@@ -375,7 +291,10 @@ async def search_dict_stream(
 
 
 @router.post("/ai", response_model=DictAIResponse)
-async def dict_ai_lookup(request: DictAIRequest):
+async def dict_ai_lookup(
+    request: DictAIRequest,
+    llm_service: LLMService = Depends(get_llm_service),
+):
     """
     Get AI-enhanced dictionary information for a word.
     
@@ -387,9 +306,6 @@ async def dict_ai_lookup(request: DictAIRequest):
     """
     if not request.word or len(request.word) > 50:
         raise HTTPException(status_code=400, detail="Word must be 1-50 characters")
-    
-    settings = get_settings()
-    llm_service = LLMService(settings)
     
     try:
         result = await llm_service.get_dict_supplement(
@@ -404,7 +320,11 @@ async def dict_ai_lookup(request: DictAIRequest):
 
 
 @router.post("/mnemonic")
-async def generate_mnemonic(word: str, meaning: str):
+async def generate_mnemonic(
+    word: str,
+    meaning: str,
+    llm_service: LLMService = Depends(get_llm_service),
+):
     """
     Generate AI mnemonic content for vocabulary learning.
     
@@ -413,8 +333,6 @@ async def generate_mnemonic(word: str, meaning: str):
     
     Returns TOPIK-style example sentences and related words.
     """
-    settings = get_settings()
-    llm_service = LLMService(settings)
     
     try:
         result = await llm_service.generate_mnemonic(word, meaning)
@@ -424,17 +342,13 @@ async def generate_mnemonic(word: str, meaning: str):
         return {"examples": [], "synonyms": [], "antonyms": []}
 
 
-class QuickTranslateResponse(BaseModel):
-    """Quick translate response model."""
-    word: str
-    translation: str
-    source: str  # 'local' or 'ai'
 
 
 @router.get("/quick-translate")
 async def quick_translate(
     word: str = Query(..., min_length=1, max_length=50),
-    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$")
+    direction: str = Query("auto", pattern="^(auto|ko2zh|zh2ko)$"),
+    llm_service: LLMService = Depends(get_llm_service),
 ):
     """
     Quick translate a word - returns only translation result.
@@ -471,26 +385,32 @@ async def quick_translate(
                 )
     
     # Not found in local, use LLM
-    settings = get_settings()
-    cache = get_cache(settings)
-    cache_key = f"quick_translate:{word}:{actual_direction}"
+    redis = get_redis_service()
+    cache_key = f"quick_translate:v2:{word}:{actual_direction}"
     
-    # Check cache
-    cached_result = cache.get(cache_key)
-    if cached_result:
+    # Only accept validated entries written by the current cache schema.
+    # Legacy keys remain untouched and cannot turn a historical failure into success.
+    cached_result = await redis.get_json(cache_key) if redis else None
+    if (isinstance(cached_result, dict)
+            and cached_result.get("schema_version") == 2
+            and cached_result.get("success") is True
+            and isinstance(cached_result.get("translation"), str)
+            and cached_result["translation"].strip()):
         return QuickTranslateResponse(
             word=word,
-            translation=cached_result.get('translation', ''),
+            translation=cached_result["translation"],
             source='ai'
         )
-    
+
     # Call LLM for quick translation
-    llm_service = LLMService(settings)
     try:
         translation = await llm_service.quick_translate(word, actual_direction)
-        
-        # Cache the result
-        cache.set(cache_key, {"translation": translation}, ttl=86400 * 7)  # 7 days
+        if not isinstance(translation, str) or not translation.strip():
+            raise ValueError("Translation provider returned no content")
+
+        # Cache the validated success only
+        if redis:
+            await redis.set_json(cache_key, {"schema_version": 2, "success": True, "translation": translation}, ttl=86400 * 7)  # 7 days
         
         return QuickTranslateResponse(
             word=word,
@@ -498,9 +418,5 @@ async def quick_translate(
             source='ai'
         )
     except Exception as e:
-        logger.warning(f"Quick translate failed: {e}")
-        return QuickTranslateResponse(
-            word=word,
-            translation="翻译失败",
-            source='error'
-        )
+        logger.warning("Quick translate failed ({})", type(e).__name__)
+        raise HTTPException(status_code=503, detail="Translation service unavailable") from None

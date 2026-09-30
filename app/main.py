@@ -1,8 +1,13 @@
 """
 LingAI Backend - FastAPI Application Entry Point
 """
-from fastapi import FastAPI
+import time
+import uuid
+
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 from loguru import logger
 import os
@@ -10,13 +15,14 @@ import os
 from app.config import get_settings
 from app.routers import tts, dict_ai, content, stats, spirit, sse_test
 from app.services.redis_service import init_redis, close_redis
-
-settings = get_settings()
+from app.dependencies import init_services, close_services
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
+    settings = get_settings()
+
     # Startup
     logger.info("LingAI Backend starting...")
     
@@ -29,12 +35,64 @@ async def lifespan(app: FastAPI):
     
     # Initialize Redis for TTS caching
     await init_redis(settings)
+
+    # Initialize service singletons (LLM / TTS)
+    init_services(settings)
     
     yield
     
     # Shutdown
+    await close_services()
     await close_redis()
     logger.info("LingAI Backend shutting down...")
+
+
+# ---------------------------------------------------------------------------
+#  Trace Middleware — 链路追踪
+# ---------------------------------------------------------------------------
+
+class TraceMiddleware(BaseHTTPMiddleware):
+    """
+    为每个请求分配 trace_id，用于全链路日志追踪。
+
+    行为：
+    1. 优先从请求头 X-Trace-Id 读取（由 Unified Service 网关透传）
+    2. 若无则自动生成 UUID
+    3. 写入 request.state.trace_id，供下游业务代码使用
+    4. 响应头回传 X-Trace-Id
+    5. 打印请求/响应摘要日志（含耗时）
+    """
+
+    TRACE_HEADER = "X-Trace-Id"
+
+    async def dispatch(self, request: Request, call_next):
+        # 1. 获取或生成 trace_id
+        trace_id = request.headers.get(self.TRACE_HEADER) or uuid.uuid4().hex
+        request.state.trace_id = trace_id
+
+        # 2. 记录请求日志
+        logger.info(
+            "[{}] --> {} {} (client={})",
+            trace_id, request.method, request.url.path,
+            request.client.host if request.client else "-",
+        )
+
+        # 3. 执行后续处理并计时
+        start = time.perf_counter()
+        response = await call_next(request)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+
+        # 4. 响应头回传 trace_id
+        response.headers[self.TRACE_HEADER] = trace_id
+
+        # 5. 记录响应日志
+        logger.info(
+            "[{}] <-- {} {} {} ({:.1f}ms)",
+            trace_id, request.method, request.url.path,
+            response.status_code, elapsed_ms,
+        )
+
+        return response
 
 
 # Create FastAPI application
@@ -45,16 +103,26 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware for development
-if settings.cors_enabled:
-    allow_origins = settings.cors_origins_list or ["*"]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=allow_origins,
-        allow_credentials=settings.cors_allow_credentials,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# CORS middleware — 仅在显式启用且白名单非空时挂载
+_settings = get_settings()
+if _settings.cors_enabled:
+    _origins = [o.strip() for o in _settings.cors_allow_origins.split(",") if o.strip()]
+    if _origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=_origins,
+            allow_credentials=_settings.cors_allow_credentials,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        logger.info("CORS enabled for origins: {}", _origins)
+    else:
+        logger.warning("CORS_ENABLED=true but CORS_ALLOW_ORIGINS is empty — CORS middleware NOT mounted")
+else:
+    logger.info("CORS disabled (default)")
+
+# Trace middleware — must be added after CORS so trace_id covers all routes
+app.add_middleware(TraceMiddleware)
 
 # Include routers
 app.include_router(tts.router, prefix="/api/tts", tags=["TTS"])
@@ -63,6 +131,29 @@ app.include_router(content.router, prefix="/api/content", tags=["Content"])
 app.include_router(stats.router, prefix="/api/stats", tags=["Statistics"])
 app.include_router(spirit.router, prefix="/api/spirit", tags=["Spirit"])
 app.include_router(sse_test.router, prefix="/api/sse", tags=["SSE Test"])
+
+
+# ---------------------------------------------------------------------------
+#  Global Exception Handlers — 统一 JSON 错误响应
+# ---------------------------------------------------------------------------
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    trace_id = getattr(request.state, "trace_id", "")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "traceId": trace_id},
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    trace_id = getattr(request.state, "trace_id", "")
+    logger.exception("[{}] Unhandled exception: {}", trace_id, exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "traceId": trace_id},
+    )
 
 
 @app.get("/")

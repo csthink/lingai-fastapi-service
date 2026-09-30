@@ -26,8 +26,14 @@ class Settings(BaseSettings):
     aliyun_access_key_id: str = ""
     aliyun_access_key_secret: str = ""
     aliyun_tts_app_key: str = ""
-    aliyun_voice_ko: str = "xiaoyun"
-    aliyun_voice_zh: str = "xiaoyun"
+
+    # TTS Provider
+    tts_provider: str = "aliyun"              # aliyun | edge
+    tts_fallback_enabled: bool = True         # 生产建议 true（有降级）
+    aliyun_nls_endpoint: str = "https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/tts"
+    aliyun_region: str = "cn-shanghai"
+    aliyun_voice_ko: str = "xiaoyun"          # 韩语音色（账号可用值，后续可调）
+    aliyun_voice_zh: str = "xiaoyun"          # 中文音色
     
     # Data paths
     data_dir: str = "./data"
@@ -94,6 +100,8 @@ class Settings(BaseSettings):
         """Redis kwargs for sync clients."""
         kwargs = self.redis_base_kwargs.copy()
         kwargs["decode_responses"] = True
+        kwargs["socket_timeout"] = self.redis_socket_timeout
+        kwargs["socket_connect_timeout"] = self.redis_connect_timeout
         return kwargs
 
     @property
