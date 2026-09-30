@@ -96,6 +96,8 @@ async def search_dict(
             direction=actual_direction
         )
         
+        if not ai_result.get("ai_meaning"):
+            raise ValueError("Dictionary provider returned no meaning")
         ai_response = DictAIResponse(**ai_result)
         
         # Build response
@@ -117,19 +119,8 @@ async def search_dict(
         return result_dict
         
     except Exception as e:
-        logger.warning(f"LLM search failed: {e}")
-        import traceback
-        logger.warning(traceback.format_exc())
-        
-        # Return empty response on error
-        response = DictSearchResponse(
-            source='ai',
-            query=query,
-            direction=actual_direction,
-            results=[],
-            ai_supplement=None
-        )
-        return response.model_dump(by_alias=True)
+        logger.warning("LLM search failed ({})", type(e).__name__)
+        raise HTTPException(status_code=503, detail="Dictionary service unavailable") from None
 
 
 @router.get("/search/stream")
@@ -261,6 +252,8 @@ async def search_dict_stream(
                     json_text = re.sub(r'\s*```$', '', json_text)
                 
                 ai_result = json.loads(json_text)
+                if not ai_result.get("ai_meaning"):
+                    raise ValueError("Dictionary provider returned no meaning")
                 ai_response = DictAIResponse(**ai_result)
                 
                 response = DictSearchResponse(
@@ -279,12 +272,12 @@ async def search_dict_stream(
                 
                 yield f"data: {json.dumps({'type': 'done', 'data': result_dict}, ensure_ascii=False)}\n\n"
             except Exception as e:
-                logger.warning(f"Stream: Failed to parse response: {e}")
-                yield f"data: {json.dumps({'type': 'done', 'data': {'raw': full_response}}, ensure_ascii=False)}\n\n"
+                logger.warning("Stream: Invalid dictionary response ({})", type(e).__name__)
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Dictionary service unavailable'}, ensure_ascii=False)}\n\n"
                 
         except Exception as e:
-            logger.error(f"Stream: LLM error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            logger.error("Stream: LLM error ({})", type(e).__name__)
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Dictionary service unavailable'}, ensure_ascii=False)}\n\n"
     
     return StreamingResponse(
         generate_sse(),
@@ -393,24 +386,31 @@ async def quick_translate(
     
     # Not found in local, use LLM
     redis = get_redis_service()
-    cache_key = f"quick_translate:{word}:{actual_direction}"
+    cache_key = f"quick_translate:v2:{word}:{actual_direction}"
     
-    # Check cache
+    # Only accept validated entries written by the current cache schema.
+    # Legacy keys remain untouched and cannot turn a historical failure into success.
     cached_result = await redis.get_json(cache_key) if redis else None
-    if cached_result:
+    if (isinstance(cached_result, dict)
+            and cached_result.get("schema_version") == 2
+            and cached_result.get("success") is True
+            and isinstance(cached_result.get("translation"), str)
+            and cached_result["translation"].strip()):
         return QuickTranslateResponse(
             word=word,
-            translation=cached_result.get('translation', ''),
+            translation=cached_result["translation"],
             source='ai'
         )
-    
+
     # Call LLM for quick translation
     try:
         translation = await llm_service.quick_translate(word, actual_direction)
-        
-        # Cache the result
+        if not isinstance(translation, str) or not translation.strip():
+            raise ValueError("Translation provider returned no content")
+
+        # Cache the validated success only
         if redis:
-            await redis.set_json(cache_key, {"translation": translation}, ttl=86400 * 7)  # 7 days
+            await redis.set_json(cache_key, {"schema_version": 2, "success": True, "translation": translation}, ttl=86400 * 7)  # 7 days
         
         return QuickTranslateResponse(
             word=word,
@@ -418,10 +418,6 @@ async def quick_translate(
             source='ai'
         )
     except Exception as e:
-        logger.warning(f"Quick translate failed: {e}")
-        return QuickTranslateResponse(
-            word=word,
-            translation="翻译失败",
-            source='error'
-        )
+        logger.warning("Quick translate failed ({})", type(e).__name__)
+        raise HTTPException(status_code=503, detail="Translation service unavailable") from None
 

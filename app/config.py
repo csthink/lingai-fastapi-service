@@ -1,10 +1,10 @@
 """
 LingAI Backend Configuration
 """
-import os
 from functools import lru_cache
+from typing import Any
 from pydantic_settings import BaseSettings
-from typing import Optional
+from pydantic_settings import SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     aliyun_access_key_id: str = ""
     aliyun_access_key_secret: str = ""
     aliyun_tts_app_key: str = ""
-    
+
     # TTS Provider
     tts_provider: str = "aliyun"              # aliyun | edge
     tts_fallback_enabled: bool = True         # 生产建议 true（有降级）
@@ -43,21 +43,75 @@ class Settings(BaseSettings):
     llm_timeout: int = 20  # LLM响应需要足够时间
     tts_timeout: int = 10
     
-    # Redis（生产环境必须通过环境变量 REDIS_URL 注入，禁止在源码中写入密码）
-    redis_url: str = "redis://localhost:6379/0"
+    # Redis
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_password: str = ""
+    redis_db: int = 0
+    redis_prefix: str = "lingai"
+    redis_socket_timeout: float = 5.0
+    redis_connect_timeout: float = 5.0
+
+    # CORS
+    cors_enabled: bool = False
+    cors_allow_origins: str = ""
+    cors_allow_credentials: bool = False
     
     # TTS Redis Cache
     tts_redis_ttl: int = 7 * 24 * 3600  # 7 days
     tts_preload_enabled: bool = True
-    
-    # CORS（生产默认关闭，dev 通过 .env 显式开启）
-    cors_enabled: bool = False
-    cors_allow_origins: str = ""                  # 逗号分隔白名单，如 "http://localhost:3000,https://app.example.com"
-    cors_allow_credentials: bool = False
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse comma-separated CORS origins."""
+        if not self.cors_allow_origins.strip():
+            return []
+        return [
+            origin.strip()
+            for origin in self.cors_allow_origins.split(",")
+            if origin.strip()
+        ]
+
+    @property
+    def redis_endpoint(self) -> str:
+        """Return a safe-to-log Redis endpoint string."""
+        return f"{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def redis_base_kwargs(self) -> dict[str, Any]:
+        """Shared Redis connection kwargs."""
+        kwargs: dict[str, Any] = {
+            "host": self.redis_host,
+            "port": self.redis_port,
+            "db": self.redis_db,
+        }
+        if self.redis_password:
+            kwargs["password"] = self.redis_password
+        return kwargs
+
+    @property
+    def redis_sync_kwargs(self) -> dict[str, Any]:
+        """Redis kwargs for sync clients."""
+        kwargs = self.redis_base_kwargs.copy()
+        kwargs["decode_responses"] = True
+        kwargs["socket_timeout"] = self.redis_socket_timeout
+        kwargs["socket_connect_timeout"] = self.redis_connect_timeout
+        return kwargs
+
+    @property
+    def redis_async_kwargs(self) -> dict[str, Any]:
+        """Redis kwargs for async clients."""
+        kwargs = self.redis_base_kwargs.copy()
+        kwargs["decode_responses"] = False
+        kwargs["socket_timeout"] = self.redis_socket_timeout
+        kwargs["socket_connect_timeout"] = self.redis_connect_timeout
+        return kwargs
 
 
 @lru_cache()

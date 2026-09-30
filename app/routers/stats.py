@@ -2,10 +2,10 @@
 Statistics Router
 Provides event tracking and statistics API with Redis-backed aggregation.
 """
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime
 from loguru import logger
-from app.services.redis_service import get_redis_service
+from app.services.redis_service import RedisStorageError, get_redis_service
 from app.models.stats import StatEvent, BatchStatsRequest, BatchStatsResponse
 
 router = APIRouter()
@@ -41,34 +41,37 @@ async def upload_batch_stats(request: BatchStatsRequest):
     redis = get_redis_service()
     if not redis or not redis.available:
         logger.warning("Redis unavailable, stats events dropped")
-        return BatchStatsResponse(received=len(request.events), success=True)
+        raise HTTPException(status_code=503, detail="Statistics storage unavailable")
 
-    # Aggregate into both per-device and global hashes
-    keys = [f"{STATS_KEY_PREFIX}{request.device_id}", f"{STATS_KEY_PREFIX}global"]
-    for key in keys:
-        await redis.hincrby(key, "total_sessions", 1)
-
-    for event in request.events:
-        ts = event.ts / 1000 if event.ts > 1_000_000_000_000 else event.ts
-        event_time = datetime.fromtimestamp(ts)
-        logger.debug(f"Event: {event.name} at {event_time} - {event.data}")
-
-        data = event.data or {}
+    try:
+        # Aggregate into both per-device and global hashes
+        keys = [f"{STATS_KEY_PREFIX}{request.device_id}", f"{STATS_KEY_PREFIX}global"]
         for key in keys:
-            if event.name in ("study_minute", "study_minutes", "study_time"):
-                await redis.hincrby(key, "total_study_minutes", _to_int(data.get("minutes", 0)))
-            elif event.name in ("lesson_completed", "lesson_complete"):
-                await redis.hincrby(key, "total_lessons_completed", _to_int(data.get("count", 1)))
-            elif event.name in ("word_mastered", "word_learned"):
-                await redis.hincrby(key, "total_words_mastered", _to_int(data.get("count", 1)))
-            elif event.name == "tts_play":
-                await redis.hincrby(key, "tts_total_count", 1)
-                if bool(data.get("success", False)):
-                    await redis.hincrby(key, "tts_success_count", 1)
-            elif event.name == "deepseek_call":
-                await redis.hincrby(key, "deepseek_total_count", 1)
-                if bool(data.get("success", False)):
-                    await redis.hincrby(key, "deepseek_success_count", 1)
+            await redis.hincrby(key, "total_sessions", 1)
+
+        for event in request.events:
+            ts = event.ts / 1000 if event.ts > 1_000_000_000_000 else event.ts
+            event_time = datetime.fromtimestamp(ts)
+            logger.debug(f"Event: {event.name} at {event_time} - {event.data}")
+
+            data = event.data or {}
+            for key in keys:
+                if event.name in ("study_minute", "study_minutes", "study_time"):
+                    await redis.hincrby(key, "total_study_minutes", _to_int(data.get("minutes", 0)))
+                elif event.name in ("lesson_completed", "lesson_complete"):
+                    await redis.hincrby(key, "total_lessons_completed", _to_int(data.get("count", 1)))
+                elif event.name in ("word_mastered", "word_learned"):
+                    await redis.hincrby(key, "total_words_mastered", _to_int(data.get("count", 1)))
+                elif event.name == "tts_play":
+                    await redis.hincrby(key, "tts_total_count", 1)
+                    if bool(data.get("success", False)):
+                        await redis.hincrby(key, "tts_success_count", 1)
+                elif event.name == "deepseek_call":
+                    await redis.hincrby(key, "deepseek_total_count", 1)
+                    if bool(data.get("success", False)):
+                        await redis.hincrby(key, "deepseek_success_count", 1)
+    except RedisStorageError:
+        raise HTTPException(status_code=503, detail="Statistics storage unavailable") from None
 
     return BatchStatsResponse(received=len(request.events), success=True)
 
@@ -82,17 +85,12 @@ async def get_stats_summary(device_id: str = Query("global")):
     """
     redis = get_redis_service()
     if not redis or not redis.available:
-        return {
-            "total_sessions": 0,
-            "total_lessons_completed": 0,
-            "total_words_mastered": 0,
-            "total_study_minutes": 0,
-            "tts_success_rate": 0.0,
-            "deepseek_success_rate": 0.0,
-            "message": "Redis unavailable",
-        }
+        raise HTTPException(status_code=503, detail="Statistics storage unavailable")
 
-    raw = await redis.hgetall(f"{STATS_KEY_PREFIX}{device_id}")
+    try:
+        raw = await redis.hgetall(f"{STATS_KEY_PREFIX}{device_id}")
+    except RedisStorageError:
+        raise HTTPException(status_code=503, detail="Statistics storage unavailable") from None
 
     def getf(k: str) -> int:
         """Extract an int field from the raw hash (handles bytes keys)."""

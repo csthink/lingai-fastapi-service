@@ -9,6 +9,10 @@ from loguru import logger
 from app.config import Settings
 
 
+class RedisStorageError(RuntimeError):
+    """A required Redis operation could not be completed."""
+
+
 class RedisService:
     """Redis connection manager with async support."""
     
@@ -18,28 +22,27 @@ class RedisService:
         self.available: bool = False
     
     async def connect(self):
-        """Initialize Redis connection from URL."""
+        """Initialize Redis connection from settings."""
         try:
-            self.client = aioredis.from_url(
-                self.settings.redis_url,
-                decode_responses=False,  # Keep binary data for audio
-                socket_timeout=5.0,
-                socket_connect_timeout=5.0
-            )
-            
+            self.client = aioredis.Redis(**self.settings.redis_async_kwargs)
+
             # Test connection
             await self.client.ping()
             self.available = True
-            logger.info("Redis connected successfully")
+            logger.info("Redis connected successfully: {}", self.settings.redis_endpoint)
         except Exception as e:
-            logger.warning(f"Redis connection failed: {e}. Will use file cache only.")
+            logger.warning(
+                "Redis connection failed for {}: {}. Will use file cache only.",
+                self.settings.redis_endpoint,
+                e,
+            )
             self.client = None
             self.available = False
     
     async def disconnect(self):
         """Close Redis connection."""
         if self.client:
-            await self.client.close()
+            await self.client.aclose()
             logger.info("Redis disconnected")
     
     async def get(self, key: str) -> Optional[bytes]:
@@ -66,9 +69,10 @@ class RedisService:
             logger.warning(f"Redis SET failed for {key}: {e}")
             return False
 
-    async def get_json(self, key: str, prefix: str = "lingai") -> Optional[Any]:
+    async def get_json(self, key: str, prefix: Optional[str] = None) -> Optional[Any]:
         """Get JSON-serialized value from Redis. Returns deserialized object or None."""
-        full_key = f"{prefix}:{key}"
+        selected_prefix = self.settings.redis_prefix if prefix is None else prefix
+        full_key = f"{selected_prefix}:{key}" if selected_prefix else key
         raw = await self.get(full_key)
         if raw is None:
             return None
@@ -78,9 +82,10 @@ class RedisService:
             logger.warning(f"Redis JSON decode failed for {full_key}: {e}")
             return None
 
-    async def set_json(self, key: str, value: Any, ttl: Optional[int] = None, prefix: str = "lingai") -> bool:
+    async def set_json(self, key: str, value: Any, ttl: Optional[int] = None, prefix: Optional[str] = None) -> bool:
         """Set JSON-serialized value with optional TTL."""
-        full_key = f"{prefix}:{key}"
+        selected_prefix = self.settings.redis_prefix if prefix is None else prefix
+        full_key = f"{selected_prefix}:{key}" if selected_prefix else key
         data = json.dumps(value, ensure_ascii=False).encode("utf-8")
         return await self.set(full_key, data, ttl=ttl)
 
@@ -105,24 +110,24 @@ class RedisService:
             return []
 
     async def hincrby(self, key: str, field: str, amount: int = 1) -> int:
-        """Increment hash field by amount."""
+        """Increment a hash field; never acknowledge a failed statistics write."""
         if not self.available or not self.client:
-            return 0
+            raise RedisStorageError("Statistics storage unavailable")
         try:
             return await self.client.hincrby(key, field, amount)
-        except Exception as e:
-            logger.warning(f"Redis HINCRBY failed for {key}.{field}: {e}")
-            return 0
+        except Exception as error:
+            logger.warning("Redis HINCRBY failed ({})", type(error).__name__)
+            raise RedisStorageError("Statistics storage unavailable") from None
 
     async def hgetall(self, key: str) -> dict:
-        """Get all fields and values of a hash."""
+        """Read hash fields, distinguishing an empty hash from a read failure."""
         if not self.available or not self.client:
-            return {}
+            raise RedisStorageError("Statistics storage unavailable")
         try:
             return await self.client.hgetall(key)
-        except Exception as e:
-            logger.warning(f"Redis HGETALL failed for {key}: {e}")
-            return {}
+        except Exception as error:
+            logger.warning("Redis HGETALL failed ({})", type(error).__name__)
+            raise RedisStorageError("Statistics storage unavailable") from None
 
 
 # Global instance

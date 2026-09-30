@@ -48,13 +48,16 @@ def load_words_from_file(filepath: str) -> List[Dict]:
 def get_cached_words(cache: RedisCache) -> Set[str]:
     """Get set of already cached words."""
     try:
-        keys = cache._client.keys('dict_search:*:ko2zh')
         cached = set()
-        for key in keys:
+        prefix = getattr(cache, "_prefix", "").strip()
+        match_pattern = f"{prefix}:dict_search:*:ko2zh" if prefix else "dict_search:*:ko2zh"
+
+        for key in cache._client.scan_iter(match=match_pattern, count=1000):
             # Extract word from key
-            parts = key.decode().split(':')
-            if len(parts) >= 2:
-                cached.add(parts[1])
+            normalized_key = key.decode() if isinstance(key, bytes) else key
+            parts = normalized_key.split(':')
+            if len(parts) >= 3:
+                cached.add(parts[-2])
         return cached
     except Exception as e:
         logger.warning(f"Failed to get cached keys: {e}")
@@ -199,7 +202,7 @@ async def main():
     # Initialize services
     settings = get_settings()
     llm_service = LLMService(settings)
-    cache = RedisCache(settings.redis_url)
+    cache = RedisCache(settings)
     
     # Define level files
     level_files = {

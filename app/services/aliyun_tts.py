@@ -194,7 +194,7 @@ class AliyunTTSService:
         ct = resp.headers.get("content-type", "")
         if resp.status_code != 200 or "audio" not in ct:
             raise RuntimeError(
-                f"Aliyun TTS failed: status={resp.status_code}, lang={lang}, voice={voice}, body={resp.text[:200]}"
+                f"Aliyun TTS failed: status={resp.status_code}, lang={lang}, voice={voice}"
             )
         return resp.content, "aliyun"
     
@@ -219,9 +219,9 @@ class AliyunTTSService:
         try:
             return await self._call_aliyun_tts(text, lang)
         except Exception as e:
-            logger.warning(f"Aliyun TTS error: {e}")
+            logger.warning("Aliyun TTS error ({})", type(e).__name__)
             if not self.settings.tts_fallback_enabled:
-                raise
+                raise RuntimeError("Aliyun TTS service unavailable") from None
             logger.info("Falling back to Edge TTS")
             audio = await self._fallback_tts(text, lang)
             return audio, "edge"
@@ -252,8 +252,8 @@ class AliyunTTSService:
             logger.error("edge-tts not installed. Run: pip install edge-tts")
             raise RuntimeError("TTS service not available")
         except Exception as e:
-            logger.error(f"Fallback TTS failed: {e}")
-            raise
+            logger.error("Fallback TTS failed ({})", type(e).__name__)
+            raise RuntimeError("Edge TTS service unavailable") from None
     
     def _estimate_duration(self, text: str, lang: str) -> int:
         """Estimate audio duration in milliseconds."""
