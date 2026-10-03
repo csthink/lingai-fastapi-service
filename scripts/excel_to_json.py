@@ -16,13 +16,13 @@ import os
 import sys
 from typing import List, Dict, Any, Optional
 from loguru import logger
-import pandas as pd
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config import get_settings
 from app.services.llm_service import LLMService
+from scripts.wordlist_cleanup import clean_meaning
 
 
 def romanize_korean(hangul: str) -> str:
@@ -41,6 +41,7 @@ def romanize_korean(hangul: str) -> str:
 
 def read_excel(file_path: str) -> List[Dict[str, str]]:
     """Read Excel file and return list of word entries."""
+    import pandas as pd
     logger.info(f"Reading Excel file: {file_path}")
     
     df = pd.read_excel(file_path)
@@ -64,7 +65,7 @@ def read_excel(file_path: str) -> List[Dict[str, str]]:
     for _, row in df.iterrows():
         hangul = str(row['单词']).strip()
         pos = str(row['词性']).strip() if pd.notna(row['词性']) else ''
-        meaning = str(row['中文']).strip() if pd.notna(row['中文']) else ''
+        meaning = clean_meaning(str(row['中文']).strip() if pd.notna(row['中文']) else '')
         
         if hangul and hangul != 'nan':
             words.append({
@@ -200,6 +201,11 @@ async def build_wordlist(
                 # Skip if already has content (idempotency)
                 if hangul in existing_words:
                     existing_entry = existing_words[hangul]
+                    # Repair known source contamination without replacing unrelated edits.
+                    existing_meaning = clean_meaning(existing_entry.get('primary_meaning', ''))
+                    if word_data['meaning'] and word_data['meaning'] != existing_meaning:
+                        raise ValueError(f'Source meaning differs for {hangul}; manual review required')
+                    existing_entry['primary_meaning'] = existing_meaning
                     existing_entry['id'] = word_id  # Update ID
                     existing_entry['lesson_id'] = (word_id - 1) // words_per_lesson + 1
                     all_words.append(existing_entry)

@@ -219,6 +219,24 @@ docker run -d \
 
 ## 数据处理脚本
 
+### 已知来源标题的离线修正
+
+`data/common_words.xlsx` 保留原始来源字节。`scripts/wordlist_cleanup.py` 仅清理已核实的完整释义后缀 `歷年TOPIK 最常出現的必背單字`；未知标题变体及清理后空释义会失败，合法 `TOPIK` 内容保留。Excel 导入使用相同规则，复用已有增强内容时也检查主释义，不会因跳过模型生成而保留旧标题。与来源不一致的其他释义必须人工核对。
+
+修复已有 JSON 使用下列离线工具，不调用模型或 Redis，不重新生成例句。工具只支持本仓单工作表、文本型 `单词/词性/中文` 列，遇到公式、缺列、编号或词形与位置不一致时失败。它逐条比对原释义与清理后来源，仅修改 `primary_meaning`，保留词序、编号、数量及其他内容。
+
+```sh
+# 默认只检查并打印逐词差异及前后 SHA256，不写入数据
+.venv/bin/python -B scripts/refresh_word_meanings.py
+
+# 审阅差异并保留原数据后，原子替换 JSON；重复执行无新变化
+.venv/bin/python -B scripts/refresh_word_meanings.py --apply
+```
+
+可用 `--source`、`--target` 指定源 Excel 与已有 JSON。课程接口每次请求读取 JSON，数据更新后重新进入课程即可请求新内容，无需重启服务、清 Redis 或清除客户端进度。复验应检查接口与真机显示；已有生词本等历史副本不由该工具更新。原始证据和日志放在受保护且被忽略的 `/.local/`。
+
+### 完整词库生成
+
 `scripts/` 目录下的脚本用于词库数据的构建和维护：
 
 ```bash
